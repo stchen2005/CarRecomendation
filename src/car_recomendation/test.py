@@ -13,71 +13,136 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder
+from sklearn import svm
+# -------------------------
+# 1. Load dataset
+# -------------------------
+car_data = pd.read_csv("CarRecomendation/data/Cars Datasets 2025.csv", encoding="latin1")
 
-car_data = pd.read_csv("CarRecomendation\data\Cars Datasets 2025.csv", encoding="latin1")
-# print(car_data.shape)
-print(car_data.head())
-print(car_data.dtypes)
-label_encoder = LabelEncoder()
-print(car_data.columns)
-print(car_data.columns.size)
-excluded = ['Cars Names', 'Company Names']
-target = 'Performance(0 - 100 )KM/H'
-for column in car_data.columns:
-    if column not in excluded:
-        car_data[column] = label_encoder.fit_transform(car_data[column].astype(str))
-print(car_data.dtypes)
+# -------------------------
+# 2. Clean numeric columns
+# -------------------------
+def clean_numeric(series):
+    # Convert to string and remove commas and invalid chars
+    cleaned = (
+        series.astype(str)
+        .str.replace(',', '', regex=False)
+        .str.replace(r'[^0-9.]', '', regex=True)
+    )
 
-X = car_data.drop(excluded + ['Performance(0 - 100 )KM/H'], axis=1)
-Y = car_data['Performance(0 - 100 )KM/H']
-X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=2)
+    # Fix values with multiple dots like "64.872.8"
+    def fix_multiple_dots(value):
+        if value.count('.') <= 1:
+            return value
+        parts = value.split('.')
+        return ''.join(parts[:-1]) + '.' + parts[-1]
+
+    cleaned = cleaned.apply(fix_multiple_dots)
+
+    # Convert empty strings to NaN
+    cleaned = cleaned.replace('', np.nan)
+
+    # Convert to float
+    return cleaned.astype(float)
+
+numeric_cols = [
+    'CC/Battery Capacity',
+    'HorsePower',
+    'Total Speed',
+    'Cars Prices',
+    'Torque',
+    'Performance(0 - 100 )KM/H'
+]
+
+for col in numeric_cols:
+    car_data[col] = clean_numeric(car_data[col])
+
+
+# -------------------------
+# 3. Clean Seats (handles "2+2")
+# -------------------------
+def clean_seats(value):
+    value = str(value).strip()
+
+    if "+" in value:
+        try:
+            return sum(int(x) for x in value.split("+"))
+        except:
+            return None
+
+    if value.isdigit():
+        return int(value)
+
+    return None
+
+car_data["Seats"] = car_data["Seats"].apply(clean_seats)
+
+
+# -------------------------
+# 4. Remove any remaining invalid rows
+# -------------------------
+car_data = car_data.dropna(subset=numeric_cols + ["Seats"])
+
+# -------------------------
+# 5. Define features AFTER cleaning
+# -------------------------
 categorical_features = ['Engines', 'Fuel Types']
-numeric_features = ['CC/Battery Capacity', 'HorsePower', 'Total Speed', 'Cars Prices', 'Seats', 'Torque']
+numeric_features = ['CC/Battery Capacity', 'HorsePower', 'Total Speed',
+                    'Cars Prices', 'Seats', 'Torque']
 
-# Preprocessor: OneHot for categorical, StandardScaler for numeric
+X = car_data.drop(columns=['Company Names', 'Cars Names', 'Performance(0 - 100 )KM/H'])
+y = car_data['Performance(0 - 100 )KM/H']
+
+
+# -------------------------
+# 6. Preprocessor
+# -------------------------
 preprocessor = ColumnTransformer(
     transformers=[
         ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features),
         ('num', StandardScaler(), numeric_features)
-    ],
-    remainder='drop'  # drop excluded columns
+    ]
 )
-#print(car_data.dtypes)
-scaler = StandardScaler()
+
+# -------------------------
+# 7. Train/test split
+# -------------------------
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=2
+)
+
 X_train_processed = preprocessor.fit_transform(X_train)
 X_test_processed = preprocessor.transform(X_test)
+
+# -------------------------
+# 8. Train model
+# -------------------------
 model = RandomForestRegressor(n_estimators=100, random_state=2)
-model.fit(X_train_processed, Y_train)
+model.fit(X_train_processed, y_train)
 
-# Evaluate
+# -------------------------
+# 9. Evaluate
+# -------------------------
 predictions = model.predict(X_test_processed)
+print("MSE:", mean_squared_error(y_test, predictions))
+print("R²:", r2_score(y_test, predictions))
 
-print("MSE:", mean_squared_error(Y_test, predictions))
-print("R²:", r2_score(Y_test, predictions))
+# -------------------------
+# 10. Predict a new car
+# -------------------------
 new_car = {
-    'Company Names': 'FERRARI',
-    'Cars Names': '812 GTS',
-    'Engines': 'V12',
-    'CC/Battery Capacity': 6496,
-    'HorsePower': 789,
-    'Total Speed': 340,
-    'Performance(0 - 100 )KM/H': 2.9,   # target column, usually not included in X
-    'Cars Prices': 350000,
+    'Engines': 'I4',
+    'CC/Battery Capacity': 2300,
+    'HorsePower': 315,
+    'Total Speed': 180,
+    'Cars Prices': 100,
     'Fuel Types': 'Petrol',
-    'Seats': 2,
-    'Torque': 718
+    'Seats': 4,
+    'Torque': 350
 }
+
 new_car_df = pd.DataFrame([new_car])
-new_car_df = new_car_df.drop(columns=['Company Names', 'Cars Names', 'Performance(0 - 100 )KM/H'])
-# Preprocess new car safely
+
 X_new_processed = preprocessor.transform(new_car_df)
 predicted_time = model.predict(X_new_processed)
-print("Predicted 0-100 km/h time:", predicted_time[0])
-print(new_car_df)
-print(new_car_df.dtypes)
-X_new_processed = preprocessor.transform(new_car_df)
-
-print("Processed shape:", X_new_processed.shape)
-print("Processed vector:", X_new_processed.toarray()[0])
-X_train_processed_sample = preprocessor.transform(X_train.iloc[[0]])
-print("Training sample vector:", X_train_processed_sample.toarray()[0])
+print("Predicted 0–100 km/h time:", predicted_time[0])
